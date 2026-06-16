@@ -5,8 +5,9 @@ from dotenv import load_dotenv
 import os
 import json
 from datetime import datetime, timedelta
-
+import time
 load_dotenv()
+last_call = 0
 
 api_key = os.getenv("API_KEY")
 api_secret = os.getenv("API_SECRET")
@@ -68,9 +69,11 @@ def get_performance():
 # =========================
 def get_account_data():
 
+    time.sleep(1)
     positions_resp = session.get_positions(category="linear", settleCoin="USDT")
     wallet_resp = session.get_wallet_balance(accountType="UNIFIED")
 
+    time.sleep(1)
     positions = positions_resp['result']['list']
     wallet = wallet_resp['result']['list'][0]
 
