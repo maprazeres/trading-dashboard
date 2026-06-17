@@ -6,23 +6,24 @@ import os
 import json
 from datetime import datetime, timedelta
 import time
+
 load_dotenv()
-last_call = 0
 
 api_key = os.getenv("API_KEY")
 api_secret = os.getenv("API_SECRET")
 
+# ✅ TESTNET para não bloquear
 session = HTTP(testnet=True, api_key=api_key, api_secret=api_secret)
 
 app = Flask(__name__)
 
 HISTORY_FILE = "history.json"
 
+
 # =========================
-# HISTORICO
+# HISTÓRICO
 # =========================
 def save_history(balance):
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     data = []
@@ -38,7 +39,6 @@ def save_history(balance):
 
 
 def get_performance():
-
     if not os.path.exists(HISTORY_FILE):
         return 0, 0
 
@@ -65,12 +65,10 @@ def get_performance():
 
 
 # =========================
-# CONTA + POSIÇÕES
+# CONTA (COM PROTEÇÃO ⛑️)
 # =========================
 def get_account_data():
     try:
-        import time
-
         time.sleep(1)
         positions_resp = session.get_positions(category="linear", settleCoin="USDT")
 
@@ -108,58 +106,65 @@ def get_account_data():
 
     except Exception as e:
         print("ERRO BYBIT:", e)
-
-        # ✅ FALLBACK SE DER ERRO
         return [], 0, 0, 0, 0, 0
 
 
 # =========================
-# MARKET
+# MERCADO
 # =========================
 def get_market():
+    try:
+        coins = requests.get(
+            "https://api.bybit.com/v5/market/tickers?category=linear"
+        ).json()['result']['list']
 
-    coins = requests.get("https://api.bybit.com/v5/market/tickers?category=linear").json()['result']['list']
+        btc = next(
+            (float(c['price24hPcnt']) * 100 for c in coins if c['symbol'] == "BTCUSDT"),
+            0
+        )
 
-    btc = next((float(c['price24hPcnt'])*100 for c in coins if c['symbol']=="BTCUSDT"),0)
+        ranking = []
 
-    ranking = []
+        for c in coins:
+            try:
+                sym = c['symbol']
+                change = float(c['price24hPcnt']) * 100
+                vol = float(c['turnover24h'])
+                price = float(c['lastPrice'])
 
-    for c in coins:
-        try:
-            sym = c['symbol']
-            change = float(c['price24hPcnt'])*100
-            vol = float(c['turnover24h'])
-            price = float(c['lastPrice'])
+                if sym == "BTCUSDT":
+                    continue
 
-            if sym == "BTCUSDT":
+                if price < 0.01 or vol < 10_000_000:
+                    continue
+
+                strength = change - btc
+
+                if abs(strength) < 2 or abs(strength) > 15:
+                    continue
+
+                score = 1 + (abs(strength) > 5) + (abs(strength) > 10)
+
+                if score < 3:
+                    continue
+
+                ranking.append({
+                    "symbol": sym,
+                    "direction": "LONG" if strength > 0 else "SHORT",
+                    "strength": strength,
+                    "score": score
+                })
+
+            except:
                 continue
 
-            if price < 0.01 or vol < 10_000_000:
-                continue
+        ranking.sort(key=lambda x: abs(x["strength"]), reverse=True)
 
-            strength = change - btc
+        return ranking[:5]
 
-            if abs(strength) < 2 or abs(strength) > 15:
-                continue
-
-            score = 1 + (abs(strength)>5) + (abs(strength)>10)
-
-            if score < 3:
-                continue
-
-            ranking.append({
-                "symbol": sym,
-                "direction": "LONG" if strength>0 else "SHORT",
-                "strength": strength,
-                "score": score
-            })
-
-        except:
-            continue
-
-    ranking.sort(key=lambda x: abs(x["strength"]), reverse=True)
-
-    return ranking[:5]
+    except Exception as e:
+        print("ERRO MARKET:", e)
+        return []
 
 
 # =========================
@@ -204,20 +209,21 @@ def home():
         </div>
 
         <div style="background:#1c1c1c;padding:15px;margin-top:10px">
-        <h3>Posições (RISCO)</h3>
+        <h3>Posições</h3>
         """
 
         for p in pos:
+            cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
+
             html += f"""
-            <div style="color:{p['color']}; font-size:13px;">
-            {p['icon']} {p['symbol']} | {p['tipo']} | ${p['pnl']:.2f}<br>
-            Entry {p['entry']} | Lev {p['lev']}x | {p['time']:.1f}h
+            <div style="color:{cor}; font-size:13px;">
+            {p['symbol']} | {p['tipo']} | ${p['pnl']:.2f}
             </div><br>
             """
 
         html += "</div></div>"
 
-        # ✅ OPORTUNIDADES COM LINK REAL
+        # ========= oportunidades =========
         html += """
         <div style="width:70%;padding:15px">
         <h3>TOP 5 OPORTUNIDADES</h3>
@@ -225,15 +231,14 @@ def home():
         """
 
         for c in ranking:
-
             cor = "#064" if c["direction"] == "LONG" else "#600"
+
             link = f"https://www.tradingview.com/chart/?symbol=BYBIT:{c['symbol']}&interval=240"
 
             html += f"""
             <div style="background:{cor};padding:10px">
-
             <a href="{link}" target="_blank">
-                <b>{c['symbol']}</b>
+            <b>{c['symbol']}</b>
             </a><br>
 
             {c['direction']} {c['strength']:.2f}%<br>
@@ -264,4 +269,4 @@ def home():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000)
