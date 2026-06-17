@@ -12,7 +12,6 @@ load_dotenv()
 api_key = os.getenv("API_KEY")
 api_secret = os.getenv("API_SECRET")
 
-# ✅ TESTNET para não bloquear
 session = HTTP(testnet=True, api_key=api_key, api_secret=api_secret)
 
 app = Flask(__name__)
@@ -39,33 +38,37 @@ def save_history(balance):
 
 
 def get_performance():
-    if not os.path.exists(HISTORY_FILE):
+    try:
+        if not os.path.exists(HISTORY_FILE):
+            return 0, 0
+
+        with open(HISTORY_FILE, "r") as f:
+            data = json.load(f)
+
+        if len(data) < 2:
+            return 0, 0
+
+        last = data[-1]["balance"]
+
+        cutoff = datetime.now() - timedelta(days=7)
+        old = data[0]["balance"]
+
+        for d in data:
+            dt = datetime.strptime(d["date"], "%Y-%m-%d %H:%M")
+            if dt < cutoff:
+                old = d["balance"]
+
+        growth = last - old
+        pct = (growth / old * 100) if old != 0 else 0
+
+        return growth, pct
+
+    except:
         return 0, 0
-
-    with open(HISTORY_FILE, "r") as f:
-        data = json.load(f)
-
-    if len(data) < 2:
-        return 0, 0
-
-    last = data[-1]["balance"]
-
-    cutoff = datetime.now() - timedelta(days=7)
-    old = data[0]["balance"]
-
-    for d in data:
-        dt = datetime.strptime(d["date"], "%Y-%m-%d %H:%M")
-        if dt < cutoff:
-            old = d["balance"]
-
-    growth = last - old
-    pct = (growth / old * 100) if old != 0 else 0
-
-    return growth, pct
 
 
 # =========================
-# CONTA (COM PROTEÇÃO ⛑️)
+# CONTA
 # =========================
 def get_account_data():
     try:
@@ -119,7 +122,7 @@ def get_market():
         ).json()['result']['list']
 
         btc = next(
-            (float(c['price24hPcnt']) * 100 for c in coins if c['symbol'] == "BTCUSDT"),
+            (float(c['price24hPcnt']) * 100 for c in coins if c['symbol']=="BTCUSDT"),
             0
         )
 
@@ -134,7 +137,6 @@ def get_market():
 
                 if sym == "BTCUSDT":
                     continue
-
                 if price < 0.01 or vol < 10_000_000:
                     continue
 
@@ -187,7 +189,7 @@ def home():
     <html>
     <body style="background:#0f0f0f;color:white;font-family:Segoe UI;">
 
-    <div style="padding:10px;background:#111;">
+    <div style="padding:12px;background:#111;">
         <a href="/?page=main">📊 Dashboard</a> |
         <a href="/?page=stats">📈 Performance</a>
     </div>
@@ -199,18 +201,22 @@ def home():
         html += f"""
         <div style="display:flex">
 
+        <!-- LEFT -->
         <div style="width:30%;padding:15px">
 
-        <div style="background:#1c1c1c;padding:15px">
-        <h3>Conta</h3>
-        ${total:.2f}<br>
+        <div style="background:#1c1c1c;padding:15px;border-radius:8px">
+        <h3>💰 Conta</h3>
+        Total: ${total:.2f}<br>
         PnL: <span style="color:{pnl_c}">${pnl:.2f}</span><br>
         Uso {used:.2f}% | Risco {mmr:.2f}%
         </div>
 
-        <div style="background:#1c1c1c;padding:15px;margin-top:10px">
-        <h3>Posições</h3>
+        <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
+        <h3>💼 Posições</h3>
         """
+
+        if not pos:
+            html += "<p>Nenhuma posição ativa</p>"
 
         for p in pos:
             cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
@@ -223,25 +229,28 @@ def home():
 
         html += "</div></div>"
 
-        # ========= oportunidades =========
+        # ========= RIGHT =========
         html += """
         <div style="width:70%;padding:15px">
-        <h3>TOP 5 OPORTUNIDADES</h3>
+        <h3>🚀 TOP 5 OPORTUNIDADES</h3>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
         """
 
+        if not ranking:
+            html += "<p>Sem oportunidades no momento</p>"
+
         for c in ranking:
             cor = "#064" if c["direction"] == "LONG" else "#600"
-
             link = f"https://www.tradingview.com/chart/?symbol=BYBIT:{c['symbol']}&interval=240"
 
             html += f"""
-            <div style="background:{cor};padding:10px">
+            <div style="background:{cor};padding:10px;border-radius:6px">
             <a href="{link}" target="_blank">
-            <b>{c['symbol']}</b>
+                <b>{c['symbol']}</b>
             </a><br>
 
-            {c['direction']} {c['strength']:.2f}%<br>
+            {c['direction']}<br>
+            {c['strength']:.2f}%<br>
             Score {c['score']}
             </div>
             """
@@ -250,12 +259,11 @@ def home():
 
     # ================= PERFORMANCE =================
     else:
-
         cor = "#00ff88" if growth >= 0 else "#ff4d4d"
 
         html += f"""
         <div style="padding:20px">
-        <h2>Performance 7 dias</h2>
+        <h2>📈 Performance 7 dias</h2>
 
         <span style="color:{cor}">
         ${growth:.2f} ({pct:.2f}%)
