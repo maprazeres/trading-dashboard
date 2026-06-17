@@ -68,72 +68,49 @@ def get_performance():
 # CONTA + POSIÇÕES
 # =========================
 def get_account_data():
+    try:
+        import time
 
-    time.sleep(1)
-    positions_resp = session.get_positions(category="linear", settleCoin="USDT")
-    wallet_resp = session.get_wallet_balance(accountType="UNIFIED")
+        time.sleep(1)
+        positions_resp = session.get_positions(category="linear", settleCoin="USDT")
 
-    time.sleep(1)
-    positions = positions_resp['result']['list']
-    wallet = wallet_resp['result']['list'][0]
+        time.sleep(1)
+        wallet_resp = session.get_wallet_balance(accountType="UNIFIED")
 
-    total_wallet = float(wallet['totalWalletBalance'])
-    available = float(wallet['totalAvailableBalance'])
+        positions = positions_resp['result']['list']
+        wallet = wallet_resp['result']['list'][0]
 
-    total_pnl = 0
-    results = []
+        total_wallet = float(wallet['totalWalletBalance'])
+        available = float(wallet['totalAvailableBalance'])
 
-    now = datetime.now().timestamp()
+        total_pnl = 0
+        results = []
 
-    for pos in positions:
+        for pos in positions:
+            size = float(pos['size'])
+            if size == 0:
+                continue
 
-        size = float(pos['size'])
-        if size == 0:
-            continue
+            pnl = float(pos['unrealisedPnl'])
+            total_pnl += pnl
 
-        pnl = float(pos['unrealisedPnl'])
-        total_pnl += pnl
+            results.append({
+                "symbol": pos['symbol'],
+                "tipo": pos['side'],
+                "pnl": pnl
+            })
 
-        entry = float(pos.get("avgPrice", 0))
-        lev = float(pos.get("leverage", 1))
+        im_rate = float(wallet.get("accountIMRate", 0))
+        used = im_rate * 100
+        mmr = im_rate * 0.3 * 100
 
-        created = int(pos.get("createdTime", 0)) / 1000
-        hours_open = (now - created) / 3600 if created > 0 else 0
+        return results, total_wallet, available, total_pnl, used, mmr
 
-        # ✅ RISCO
-        icon = "🟢"
-        color = "#00ff88"
+    except Exception as e:
+        print("ERRO BYBIT:", e)
 
-        if pnl < -5:
-            icon = "🔴"
-            color = "#ff0000"
-        elif pnl < 0:
-            icon = "🟡"
-            color = "#ffaa00"
-
-        if hours_open > 24 and pnl < 0:
-            icon = "🚨"
-            color = "#ff0000"
-
-        results.append({
-            "symbol": pos['symbol'],
-            "tipo": "LONG 🟢" if pos['side'] == "Buy" else "SHORT 🔴",
-            "pnl": pnl,
-            "entry": entry,
-            "lev": lev,
-            "time": hours_open,
-            "icon": icon,
-            "color": color
-        })
-
-    # ✅ ordena por lucro
-    results.sort(key=lambda x: x["pnl"], reverse=True)
-
-    im_rate = float(wallet.get("accountIMRate", 0))
-    used = im_rate * 100
-    mmr = im_rate * 0.3 * 100
-
-    return results, total_wallet, available, total_pnl, used, mmr
+        # ✅ FALLBACK SE DER ERRO
+        return [], 0, 0, 0, 0, 0
 
 
 # =========================
