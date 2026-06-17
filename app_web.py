@@ -71,44 +71,31 @@ def get_performance():
 # CONTA
 # =========================
 def get_account_data():
+   
     try:
-        time.sleep(1)
-        positions_resp = session.get_positions(category="linear", settleCoin="USDT")
+        data = requests.get("https://tragedy-evil-praying.ngrok-free.dev/data").json()
 
-        time.sleep(1)
-        wallet_resp = session.get_wallet_balance(accountType="UNIFIED")
-
-        positions = positions_resp['result']['list']
-        wallet = wallet_resp['result']['list'][0]
+        wallet = data["wallet"]["result"]["list"][0]
+        positions = data["positions"]["result"]["list"]
 
         total_wallet = float(wallet['totalWalletBalance'])
-        available = float(wallet['totalAvailableBalance'])
 
-        total_pnl = 0
         results = []
 
         for pos in positions:
-            size = float(pos['size'])
-            if size == 0:
+            if float(pos['size']) == 0:
                 continue
-
-            pnl = float(pos['unrealisedPnl'])
-            total_pnl += pnl
 
             results.append({
                 "symbol": pos['symbol'],
                 "tipo": pos['side'],
-                "pnl": pnl
+                "pnl": float(pos['unrealisedPnl'])
             })
 
-        im_rate = float(wallet.get("accountIMRate", 0))
-        used = im_rate * 100
-        mmr = im_rate * 0.3 * 100
-
-        return results, total_wallet, available, total_pnl, used, mmr
+        return results, total_wallet, 0, 0, 0, 0
 
     except Exception as e:
-        print("ERRO BYBIT:", e)
+        print("Erro Proxy:", e)
         return [], 0, 0, 0, 0, 0
 
 
