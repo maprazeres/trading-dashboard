@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 HISTORY_FILE = "history.json"
 
-# ✅ URL DO NGROK (ATUALIZE SE MUDAR)
+# ✅ URL DO NGROK
 NGROK_URL = "https://tragedy-evil-praying.ngrok-free.dev"
 
 
@@ -61,12 +61,13 @@ def get_performance():
 
 
 # =========================
-# ✅ DADOS REAIS VIA PROXY
+# ✅ DADOS REAIS + TEMPO
 # =========================
 def get_account_data():
     try:
         headers = {
-            "ngrok-skip-browser-warning": "true"
+            "ngrok-skip-browser-warning": "true",
+            "User-Agent": "Mozilla/5.0"
         }
 
         response = requests.get(
@@ -77,9 +78,6 @@ def get_account_data():
 
         data = response.json()
 
-        # ✅ DEBUG opcional
-        print("DATA RECEBIDA:", data)
-
         wallet = data["wallet"]["result"]["list"][0]
         positions = data["positions"]["result"]["list"]
 
@@ -89,16 +87,32 @@ def get_account_data():
         results = []
 
         for pos in positions:
-            if float(pos['size']) == 0:
+            size = float(pos['size'])
+            if size == 0:
                 continue
 
             pnl = float(pos['unrealisedPnl'])
             total_pnl += pnl
 
+            # ✅ CALCULAR TEMPO DA POSIÇÃO
+            created_time = int(pos['createdTime'])
+            entry_date = datetime.fromtimestamp(created_time / 1000)
+            now = datetime.now()
+
+            seconds = (now - entry_date).total_seconds()
+            days = seconds / 86400
+
+            # ✅ FORMATAR BONITO
+            if days < 1:
+                tempo = f"{days * 24:.1f}h"
+            else:
+                tempo = f"{days:.1f}d"
+
             results.append({
                 "symbol": pos['symbol'],
                 "tipo": pos['side'],
-                "pnl": pnl
+                "pnl": pnl,
+                "tempo": tempo
             })
 
         return results, total_wallet, 0, total_pnl, 0, 0
@@ -215,7 +229,7 @@ def home():
 
             html += f"""
             <div style="color:{cor}">
-            {p['symbol']} | {p['tipo']} | ${p['pnl']:.2f}
+            {p['symbol']} | {p['tipo']} | ${p['pnl']:.2f} | {p['tempo']}
             </div>
             """
 
