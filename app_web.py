@@ -12,7 +12,7 @@ last_call = 0
 api_key = os.getenv("API_KEY")
 api_secret = os.getenv("API_SECRET")
 
-session = HTTP(testnet=False, api_key=api_key, api_secret=api_secret)
+session = HTTP(testnet=True, api_key=api_key, api_secret=api_secret)
 
 app = Flask(__name__)
 
