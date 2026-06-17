@@ -8,8 +8,41 @@ app = Flask(__name__)
 
 HISTORY_FILE = "history.json"
 
-# ✅ URL DO NGROK
+# ✅ CONFIG DA META
+TARGET = 500
+TARGET_DATE = datetime(2026, 6, 30)
+START_BALANCE = 364  # ajuste se quiser
+
 NGROK_URL = "https://tragedy-evil-praying.ngrok-free.dev"
+
+
+# =========================
+# 🎯 META
+# =========================
+def get_goal_status(current_balance):
+
+    now = datetime.now()
+    days_left = (TARGET_DATE - now).days
+    days_left = max(days_left, 1)
+
+    remaining = TARGET - current_balance
+    daily = remaining / days_left
+
+    progress = ((current_balance - START_BALANCE) / (TARGET - START_BALANCE)) * 100
+    progress = max(0, min(progress, 100))
+
+    status = "✅ NO RITMO" if daily < 10 else "⚠️ ATRASADO"
+    cor = "#00ff88" if daily < 10 else "#ff4d4d"
+
+    return {
+        "target": TARGET,
+        "remaining": remaining,
+        "daily": daily,
+        "days_left": days_left,
+        "progress": progress,
+        "status": status,
+        "cor": cor
+    }
 
 
 # =========================
@@ -30,50 +63,17 @@ def save_history(balance):
         json.dump(data, f)
 
 
-def get_performance():
-    try:
-        if not os.path.exists(HISTORY_FILE):
-            return 0, 0
-
-        with open(HISTORY_FILE, "r") as f:
-            data = json.load(f)
-
-        if len(data) < 2:
-            return 0, 0
-
-        last = data[-1]["balance"]
-
-        cutoff = datetime.now() - timedelta(days=7)
-        old = data[0]["balance"]
-
-        for d in data:
-            dt = datetime.strptime(d["date"], "%Y-%m-%d %H:%M")
-            if dt < cutoff:
-                old = d["balance"]
-
-        growth = last - old
-        pct = (growth / old * 100) if old != 0 else 0
-
-        return growth, pct
-
-    except:
-        return 0, 0
-
-
 # =========================
-# ✅ DADOS REAIS + TEMPO
+# DADOS REAIS
 # =========================
 def get_account_data():
     try:
-        headers = {
-            "ngrok-skip-browser-warning": "true",
-            "User-Agent": "Mozilla/5.0"
-        }
-
         response = requests.get(
             f"{NGROK_URL}/data",
-            headers=headers,
-            timeout=10
+            headers={
+                "ngrok-skip-browser-warning": "true",
+                "User-Agent": "Mozilla/5.0"
+            }
         )
 
         data = response.json()
@@ -87,26 +87,20 @@ def get_account_data():
         results = []
 
         for pos in positions:
-            size = float(pos['size'])
-            if size == 0:
+            if float(pos['size']) == 0:
                 continue
 
             pnl = float(pos['unrealisedPnl'])
             total_pnl += pnl
 
-            # ✅ CALCULAR TEMPO DA POSIÇÃO
+            # ✅ TEMPO DA POSIÇÃO
             created_time = int(pos['createdTime'])
             entry_date = datetime.fromtimestamp(created_time / 1000)
-            now = datetime.now()
 
-            seconds = (now - entry_date).total_seconds()
+            seconds = (datetime.now() - entry_date).total_seconds()
             days = seconds / 86400
 
-            # ✅ FORMATAR BONITO
-            if days < 1:
-                tempo = f"{days * 24:.1f}h"
-            else:
-                tempo = f"{days:.1f}d"
+            tempo = f"{days*24:.1f}h" if days < 1 else f"{days:.1f}d"
 
             results.append({
                 "symbol": pos['symbol'],
@@ -115,67 +109,11 @@ def get_account_data():
                 "tempo": tempo
             })
 
-        return results, total_wallet, 0, total_pnl, 0, 0
+        return results, total_wallet, total_pnl
 
     except Exception as e:
-        print("ERRO PROXY:", e)
-        return [], 0, 0, 0, 0, 0
-
-
-# =========================
-# MERCADO
-# =========================
-def get_market():
-    try:
-        coins = requests.get(
-            "https://api.bybit.com/v5/market/tickers?category=linear"
-        ).json()['result']['list']
-
-        btc = next(
-            (float(c['price24hPcnt']) * 100 for c in coins if c['symbol']=="BTCUSDT"),
-            0
-        )
-
-        ranking = []
-
-        for c in coins:
-            try:
-                sym = c['symbol']
-                change = float(c['price24hPcnt']) * 100
-                vol = float(c['turnover24h'])
-                price = float(c['lastPrice'])
-
-                if sym == "BTCUSDT":
-                    continue
-                if price < 0.01 or vol < 10_000_000:
-                    continue
-
-                strength = change - btc
-
-                if abs(strength) < 2 or abs(strength) > 15:
-                    continue
-
-                score = 1 + (abs(strength) > 5) + (abs(strength) > 10)
-
-                if score < 3:
-                    continue
-
-                ranking.append({
-                    "symbol": sym,
-                    "direction": "LONG" if strength > 0 else "SHORT",
-                    "strength": strength,
-                    "score": score
-                })
-
-            except:
-                continue
-
-        ranking.sort(key=lambda x: abs(x["strength"]), reverse=True)
-
-        return ranking[:5]
-
-    except:
-        return []
+        print("ERRO:", e)
+        return [], 0, 0
 
 
 # =========================
@@ -184,13 +122,8 @@ def get_market():
 @app.route("/")
 def home():
 
-    page = request.args.get("page", "main")
-
-    pos, total, avail, pnl, used, mmr = get_account_data()
-    ranking = get_market()
-
-    save_history(total)
-    growth, pct = get_performance()
+    pos, total, pnl = get_account_data()
+    goal = get_goal_status(total)
 
     pnl_c = "#00ff88" if pnl >= 0 else "#ff4d4d"
 
@@ -198,74 +131,67 @@ def home():
     <html>
     <body style="background:#0f0f0f;color:white;font-family:Segoe UI;">
 
-    <div style="padding:12px;background:#111;">
-        <a href="/?page=main">📊 Dashboard</a> |
-        <a href="/?page=stats">📈 Performance</a>
+    <div style="padding:10px;background:#111;">
+        📊 Dashboard
     </div>
+
+    <div style="display:flex">
+
+    <!-- ESQUERDA -->
+    <div style="width:30%;padding:15px">
+
+    <div style="background:#1c1c1c;padding:15px;border-radius:8px">
+    <h3>💰 Conta</h3>
+    Total: ${total:.2f}<br>
+    PnL: <span style="color:{pnl_c}">${pnl:.2f}</span>
+    </div>
+
+    <!-- META PRO -->
+    <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
+    <h3>🎯 Meta</h3>
+
+    Meta: ${goal['target']}<br>
+    Falta: ${goal['remaining']:.2f}<br>
+    Dias: {goal['days_left']}<br>
+    Por dia: ${goal['daily']:.2f}<br>
+
+    <b style="color:{goal['cor']}">{goal['status']}</b>
+
+    <div style="background:#333;height:10px;margin-top:10px;">
+        <div style="width:{goal['progress']}%;background:#00ff88;height:10px;"></div>
+    </div>
+
+    Progresso: {goal['progress']:.1f}%
+    </div>
+
+    <!-- POSIÇÕES -->
+    <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
+    <h3>💼 Posições</h3>
     """
 
-    if page == "main":
+    if not pos:
+        html += "<p>Nenhuma posição ativa</p>"
+
+    for p in pos:
+        cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
 
         html += f"""
-        <div style="display:flex">
-
-        <div style="width:30%;padding:15px">
-
-        <div style="background:#1c1c1c;padding:15px;border-radius:8px">
-        <h3>💰 Conta</h3>
-        Total: ${total:.2f}<br>
-        PnL: <span style="color:{pnl_c}">${pnl:.2f}</span>
-        </div>
-
-        <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
-        <h3>💼 Posições</h3>
-        """
-
-        if not pos:
-            html += "<p>Nenhuma posição ativa</p>"
-
-        for p in pos:
-            cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
-
-            html += f"""
-            <div style="color:{cor}">
-            {p['symbol']} | {p['tipo']} | ${p['pnl']:.2f} | {p['tempo']}
-            </div>
-            """
-
-        html += "</div></div>"
-
-        html += """
-        <div style="width:70%;padding:15px">
-        <h3>🚀 OPORTUNIDADES</h3>
-        """
-
-        if not ranking:
-            html += "<p>Sem oportunidades</p>"
-
-        for c in ranking:
-            html += f"""
-            <div>
-            {c['symbol']} - {c['direction']} - {c['strength']:.2f}%
-            </div>
-            """
-
-        html += "</div></div>"
-
-    else:
-
-        cor = "#00ff88" if growth >= 0 else "#ff4d4d"
-
-        html += f"""
-        <div style="padding:20px">
-        <h2>Performance</h2>
-        <span style="color:{cor}">
-        ${growth:.2f} ({pct:.2f}%)
-        </span>
+        <div style="color:{cor}">
+        {p['symbol']} | {p['tipo']} | ${p['pnl']:.2f} | {p['tempo']}
         </div>
         """
 
-    html += "</body></html>"
+    html += "</div></div>"
+
+    html += """
+    <div style="width:70%;padding:15px">
+    <h3>🚀 OPORTUNIDADES</h3>
+    <p>Em breve melhorias aqui...</p>
+    </div>
+    </div>
+
+    </body></html>
+    """
 
     return html
 
