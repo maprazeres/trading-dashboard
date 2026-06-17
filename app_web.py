@@ -1,22 +1,15 @@
 from flask import Flask, request
 import requests
-from pybit.unified_trading import HTTP
-from dotenv import load_dotenv
 import os
 import json
 from datetime import datetime, timedelta
-import time
-
-load_dotenv()
-
-api_key = os.getenv("API_KEY")
-api_secret = os.getenv("API_SECRET")
-
-session = HTTP(testnet=True, api_key=api_key, api_secret=api_secret)
 
 app = Flask(__name__)
 
 HISTORY_FILE = "history.json"
+
+# ✅ URL DO NGROK (ATUALIZE SE MUDAR)
+NGROK_URL = "https://tragedy-evil-praying.ngrok-free.dev"
 
 
 # =========================
@@ -68,17 +61,30 @@ def get_performance():
 
 
 # =========================
-# CONTA
+# ✅ DADOS REAIS VIA PROXY
 # =========================
 def get_account_data():
-   
     try:
-        data = requests.get("https://tragedy-evil-praying.ngrok-free.dev/data").json()
+        headers = {
+            "ngrok-skip-browser-warning": "true"
+        }
+
+        response = requests.get(
+            f"{NGROK_URL}/data",
+            headers=headers,
+            timeout=10
+        )
+
+        data = response.json()
+
+        # ✅ DEBUG opcional
+        print("DATA RECEBIDA:", data)
 
         wallet = data["wallet"]["result"]["list"][0]
         positions = data["positions"]["result"]["list"]
 
         total_wallet = float(wallet['totalWalletBalance'])
+        total_pnl = 0
 
         results = []
 
@@ -86,16 +92,19 @@ def get_account_data():
             if float(pos['size']) == 0:
                 continue
 
+            pnl = float(pos['unrealisedPnl'])
+            total_pnl += pnl
+
             results.append({
                 "symbol": pos['symbol'],
                 "tipo": pos['side'],
-                "pnl": float(pos['unrealisedPnl'])
+                "pnl": pnl
             })
 
-        return results, total_wallet, 0, 0, 0, 0
+        return results, total_wallet, 0, total_pnl, 0, 0
 
     except Exception as e:
-        print("Erro Proxy:", e)
+        print("ERRO PROXY:", e)
         return [], 0, 0, 0, 0, 0
 
 
@@ -151,8 +160,7 @@ def get_market():
 
         return ranking[:5]
 
-    except Exception as e:
-        print("ERRO MARKET:", e)
+    except:
         return []
 
 
@@ -182,20 +190,17 @@ def home():
     </div>
     """
 
-    # ================= DASHBOARD =================
     if page == "main":
 
         html += f"""
         <div style="display:flex">
 
-        <!-- LEFT -->
         <div style="width:30%;padding:15px">
 
         <div style="background:#1c1c1c;padding:15px;border-radius:8px">
         <h3>💰 Conta</h3>
         Total: ${total:.2f}<br>
-        PnL: <span style="color:{pnl_c}">${pnl:.2f}</span><br>
-        Uso {used:.2f}% | Risco {mmr:.2f}%
+        PnL: <span style="color:{pnl_c}">${pnl:.2f}</span>
         </div>
 
         <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
@@ -209,49 +214,37 @@ def home():
             cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
 
             html += f"""
-            <div style="color:{cor}; font-size:13px;">
+            <div style="color:{cor}">
             {p['symbol']} | {p['tipo']} | ${p['pnl']:.2f}
-            </div><br>
+            </div>
             """
 
         html += "</div></div>"
 
-        # ========= RIGHT =========
         html += """
         <div style="width:70%;padding:15px">
-        <h3>🚀 TOP 5 OPORTUNIDADES</h3>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+        <h3>🚀 OPORTUNIDADES</h3>
         """
 
         if not ranking:
-            html += "<p>Sem oportunidades no momento</p>"
+            html += "<p>Sem oportunidades</p>"
 
         for c in ranking:
-            cor = "#064" if c["direction"] == "LONG" else "#600"
-            link = f"https://www.tradingview.com/chart/?symbol=BYBIT:{c['symbol']}&interval=240"
-
             html += f"""
-            <div style="background:{cor};padding:10px;border-radius:6px">
-            <a href="{link}" target="_blank">
-                <b>{c['symbol']}</b>
-            </a><br>
-
-            {c['direction']}<br>
-            {c['strength']:.2f}%<br>
-            Score {c['score']}
+            <div>
+            {c['symbol']} - {c['direction']} - {c['strength']:.2f}%
             </div>
             """
 
-        html += "</div></div></div>"
+        html += "</div></div>"
 
-    # ================= PERFORMANCE =================
     else:
+
         cor = "#00ff88" if growth >= 0 else "#ff4d4d"
 
         html += f"""
         <div style="padding:20px">
-        <h2>📈 Performance 7 dias</h2>
-
+        <h2>Performance</h2>
         <span style="color:{cor}">
         ${growth:.2f} ({pct:.2f}%)
         </span>
