@@ -23,6 +23,7 @@ def get_goal(current):
     progress = max(0, min(progress, 100))
 
     status = "✅ NO RITMO" if daily < 10 else "⚠️ ATRASADO"
+
     return remaining, daily, days, progress, status
 
 
@@ -43,7 +44,7 @@ def detect_sma_cross(df):
     return None
 
 
-# ================= OPPORTUNITIES =================
+# ================= SCANNER =================
 def get_opportunities():
     try:
         coins = requests.get(
@@ -72,6 +73,7 @@ def get_opportunities():
 
                 strength = change - btc
 
+                # ✅ menos restritivo
                 if abs(strength) < 3 or abs(strength) > 15:
                     continue
 
@@ -80,9 +82,7 @@ def get_opportunities():
 
                 df = pd.DataFrame(candles, columns=[
                     "time","open","high","low","close","volume","turnover"
-                ])
-
-                df = df.astype(float)
+                ]).astype(float)
 
                 df["sma20"] = df["close"].rolling(20).mean()
                 df["sma50"] = df["close"].rolling(50).mean()
@@ -92,6 +92,7 @@ def get_opportunities():
                 trend_up = df["sma20"].iloc[-1] > df["sma50"].iloc[-1]
                 trend_down = df["sma20"].iloc[-1] < df["sma50"].iloc[-1]
 
+                # ✅ lógica flexível (mais sinais)
                 if cross == "LONG" or trend_up:
                     direction = "LONG"
                 elif cross == "SHORT" or trend_down:
@@ -115,10 +116,12 @@ def get_opportunities():
         return ranking[:6]
 
     except:
+        print("TOTAL COINS ANALISADAS:", len(coins))
+        print("OPORTUNIDADES ENCONTRADAS:", len(ranking))
         return []
 
 
-# ================= DATA =================
+# ================= DADOS =================
 def get_data():
     try:
         res = requests.get(
@@ -142,7 +145,6 @@ def get_data():
         exposure = 0
 
         for p in positions:
-
             if float(p["size"]) == 0:
                 continue
 
@@ -209,14 +211,18 @@ def home():
 
     remaining, daily, days, progress, status = get_goal(total)
 
+    # ✅ MENU
     html = """
-    <html><body style="background:#0d1117;color:white;font-family:Segoe UI">
+    <html>
+    <body style="background:#0d1117;color:white;font-family:Segoe UI">
+
     <div style="padding:10px;background:#111">
-    <a href='/?page=main'>📊 Dashboard</a> |
-    <a href='/?page=stats'>📈 Performance</a>
+        <a href="/?page=main" style="color:white">📊 Dashboard</a> |
+        <a href="/?page=stats" style="color:white">📈 Performance</a>
     </div>
     """
 
+    # ================= DASHBOARD =================
     if page == "main":
 
         html += f"""
@@ -224,39 +230,49 @@ def home():
 
         <div style="width:30%;padding:15px;background:#161b22">
 
-        💰 ${total:.2f}<br>
-        PnL: ${pnl:.2f}<br><br>
+        <div>💰 Total: ${total:.2f}</div>
+        <div>PnL: ${pnl:.2f}</div><br>
 
-        ⚠️ Exposição: {exposure:.1f}%<br>
-        🧱 MMR: {mmr:.2f}%<br><br>
+        <div>⚠️ Exposição: {exposure:.1f}%</div>
+        <div>🧱 MMR: {mmr:.2f}%</div><br>
 
-        🎯 Falta: ${remaining:.2f}<br>
-        Por dia: ${daily:.2f}<br>
-        {status}<br><br>
+        <div>🎯 Falta: ${remaining:.2f}</div>
+        <div>Por dia: ${daily:.2f}</div>
+        <div>{status}</div><br>
 
-        🤖 IA:<br>
+        <div>🤖 IA</div>
         {''.join(f"<div>{m}</div>" for m in analises)}
 
-        <br><br><b>💼 Posições</b><br>
+        <br><b>💼 Posições</b><br>
         {"".join(f"{p['symbol']} {p['side']} ${p['pnl']:.2f} | {p['tempo']}<br>" for p in pos)}
 
         </div>
 
         <div style="width:70%;padding:15px">
-        <b>🚀 Oportunidades</b><br><br>
+
+        <h3>🚀 Oportunidades</h3>
         """
 
         if not ranking:
-            html += "Sem oportunidades"
+            html += "<div>Sem oportunidades no momento</div>"
 
         for c in ranking:
-            html += f"<div>{c['symbol']} {c['direction']} {c['strength']:.2f}% {c['level']}</div>"
+            html += f"""
+            <div style="padding:10px;margin:5px;background:{'#064' if c['direction']=='LONG' else '#600'}">
+            {c['symbol']} | {c['direction']} | {c['strength']:.2f}% | {c['level']}
+            </div>
+            """
 
         html += "</div></div>"
 
+    # ================= PERFORMANCE =================
     else:
-
-        html += "<h2>📈 Performance</h2><p>Em breve...</p>"
+        html += """
+        <div style="padding:20px">
+        <h2>📈 Performance</h2>
+        <p>Em breve gráficos 📊</p>
+        </div>
+        """
 
     html += "</body></html>"
 
