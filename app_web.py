@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, request
 import requests
 import pandas as pd
 from datetime import datetime
@@ -15,7 +15,6 @@ START_BALANCE = 364
 
 # ================= META =================
 def get_goal(current):
-
     days = max((TARGET_DATE - datetime.now()).days, 1)
     remaining = TARGET - current
     daily = remaining / days
@@ -24,36 +23,11 @@ def get_goal(current):
     progress = max(0, min(progress, 100))
 
     status = "✅ NO RITMO" if daily < 10 else "⚠️ ATRASADO"
-    color = "#00ff88" if daily < 10 else "#ff4d4d"
-
-    return remaining, daily, days, progress, status, color
-
-
-# ================= SUPERTREND =================
-def supertrend(df, period=10, multiplier=3):
-
-    hl2 = (df['high'] + df['low']) / 2
-    atr = (df['high'] - df['low']).rolling(period).mean()
-
-    upper = hl2 + multiplier * atr
-    lower = hl2 - multiplier * atr
-
-    trend = [True]
-
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > upper.iloc[i - 1]:
-            trend.append(True)
-        elif df['close'].iloc[i] < lower.iloc[i - 1]:
-            trend.append(False)
-        else:
-            trend.append(trend[i - 1])
-
-    return trend[-1]
+    return remaining, daily, days, progress, status
 
 
 # ================= SMA CROSS =================
 def detect_sma_cross(df):
-
     sma20_prev = df["sma20"].iloc[-2]
     sma50_prev = df["sma50"].iloc[-2]
 
@@ -73,13 +47,12 @@ def detect_sma_cross(df):
 def get_opportunities():
     try:
         coins = requests.get(
-            "https://api.bybit.com/v5/market/tickers?category=linear",
-            timeout=10,
+            "https://api.bybit.com/v5/market/tickers?category=linear"
         ).json()["result"]["list"]
 
         btc = next(
             (float(c["price24hPcnt"]) * 100 for c in coins if c["symbol"] == "BTCUSDT"),
-            0,
+            0
         )
 
         ranking = []
@@ -102,61 +75,51 @@ def get_opportunities():
                 if abs(strength) < 3 or abs(strength) > 15:
                     continue
 
-                url = (
-                    f"https://api.bybit.com/v5/market/kline?category=linear&"
-                    f"symbol={sym}&interval=240&limit=60"
-                )
-                candles = requests.get(url, timeout=10).json()["result"]["list"]
+                url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval=240&limit=60"
+                candles = requests.get(url).json()["result"]["list"]
 
-                df = pd.DataFrame(
-                    candles,
-                    columns=[
-                        "time", "open", "high", "low", "close",
-                        "volume", "turnover",
-                    ],
-                )
+                df = pd.DataFrame(candles, columns=[
+                    "time","open","high","low","close","volume","turnover"
+                ])
+
                 df = df.astype(float)
-
-                if len(df) < 60:
-                    continue
 
                 df["sma20"] = df["close"].rolling(20).mean()
                 df["sma50"] = df["close"].rolling(50).mean()
 
                 cross = detect_sma_cross(df)
-                st = supertrend(df)
 
-                if cross == "LONG" and st:
+                trend_up = df["sma20"].iloc[-1] > df["sma50"].iloc[-1]
+                trend_down = df["sma20"].iloc[-1] < df["sma50"].iloc[-1]
+
+                if cross == "LONG" or trend_up:
                     direction = "LONG"
-                elif cross == "SHORT" and not st:
+                elif cross == "SHORT" or trend_down:
                     direction = "SHORT"
                 else:
                     continue
 
                 level = "🔥 FORTE" if abs(strength) > 8 else "⚡ MÉDIO"
 
-                ranking.append(
-                    {
-                        "symbol": sym,
-                        "direction": direction,
-                        "strength": strength,
-                        "level": level,
-                    }
-                )
+                ranking.append({
+                    "symbol": sym,
+                    "direction": direction,
+                    "strength": strength,
+                    "level": level
+                })
 
-            except Exception:
+            except:
                 continue
 
         ranking.sort(key=lambda x: abs(x["strength"]), reverse=True)
         return ranking[:6]
 
-    except Exception:
+    except:
         return []
 
 
-# ================= DATA REAL =================
+# ================= DATA =================
 def get_data():
-
     try:
         res = requests.get(
             f"{NGROK_URL}/data",
@@ -214,20 +177,19 @@ def get_data():
 
 # ================= IA =================
 def analyze_trades(pos, exposure, mmr):
-
     mensagens = []
 
     if exposure > 150:
-        mensagens.append("🚨 Exposição MUITO alta (>150%)")
+        mensagens.append("🚨 Exposição MUITO alta")
 
     if mmr >= 10:
-        mensagens.append("🚨 Risco de liquidação (MMR >=10%)")
+        mensagens.append("🚨 Risco de liquidação")
 
     for p in pos:
         if p["pct"] > 20:
-            mensagens.append(f"🔥 {p['symbol']} grande ({p['pct']:.1f}%)")
+            mensagens.append(f"🔥 {p['symbol']} grande")
         if p["days"] > 20:
-            mensagens.append(f"⏱️ {p['symbol']} +20 dias aberta")
+            mensagens.append(f"⏱️ {p['symbol']} +20 dias")
 
     if not mensagens:
         mensagens.append("✅ Tudo sob controle")
@@ -239,87 +201,64 @@ def analyze_trades(pos, exposure, mmr):
 @app.route("/")
 def home():
 
+    page = request.args.get("page", "main")
+
     total, pnl, pos, exposure, mmr = get_data()
     ranking = get_opportunities()
     analises = analyze_trades(pos, exposure, mmr)
 
-    remaining, daily, days, progress, status, _ = get_goal(total)
+    remaining, daily, days, progress, status = get_goal(total)
 
-    html = f"""
-    <html>
-    <body style="background:#0d1117;color:white;font-family:Segoe UI;margin:0">
-
-    <h2 style="padding:10px">📊 Trading Dashboard PRO</h2>
-
-    <div style="display:flex">
-
-    <div style="width:30%;padding:15px;background:#161b22">
-
-        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
-        💰 ${total:.2f}<br>
-        PnL: <span style="color:{'#00ff88' if pnl>=0 else '#ff4d4d'}">${pnl:.2f}</span>
-        </div>
-
-        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
-        ⚠️ Exposição: {exposure:.1f}%
-        </div>
-
-        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
-        🧱 MMR: {mmr:.2f}%
-        </div>
-
-        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
-        🎯 Meta<br>
-        Falta: ${remaining:.2f}<br>
-        Dias: {days}<br>
-        Por dia: ${daily:.2f}
-        <div style="height:8px;background:#333;margin-top:5px">
-            <div style="width:{progress}%;background:#00ff88;height:8px"></div>
-        </div>
-        </div>
-
-        <div style="background:#1f2933;padding:15px;border-radius:8px">
-        🤖 IA<br>
-        {''.join(f"<div>{m}</div>" for m in analises)}
-        </div>
-
+    html = """
+    <html><body style="background:#0d1117;color:white;font-family:Segoe UI">
+    <div style="padding:10px;background:#111">
+    <a href='/?page=main'>📊 Dashboard</a> |
+    <a href='/?page=stats'>📈 Performance</a>
     </div>
-
-    <div style="width:70%;padding:15px">
-
-        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
-        🚀 Oportunidades
     """
 
-    if not ranking:
-        html += "<p>Sem sinais</p>"
+    if page == "main":
 
-    for c in ranking:
-        cor = "#064" if c["direction"] == "LONG" else "#600"
         html += f"""
-        <div style="background:{cor};padding:10px;margin:5px">
-        {c['symbol']} | {c['direction']} | {c['strength']:.2f}% | {c['level']}
+        <div style="display:flex">
+
+        <div style="width:30%;padding:15px;background:#161b22">
+
+        💰 ${total:.2f}<br>
+        PnL: ${pnl:.2f}<br><br>
+
+        ⚠️ Exposição: {exposure:.1f}%<br>
+        🧱 MMR: {mmr:.2f}%<br><br>
+
+        🎯 Falta: ${remaining:.2f}<br>
+        Por dia: ${daily:.2f}<br>
+        {status}<br><br>
+
+        🤖 IA:<br>
+        {''.join(f"<div>{m}</div>" for m in analises)}
+
+        <br><br><b>💼 Posições</b><br>
+        {"".join(f"{p['symbol']} {p['side']} ${p['pnl']:.2f} | {p['tempo']}<br>" for p in pos)}
+
         </div>
+
+        <div style="width:70%;padding:15px">
+        <b>🚀 Oportunidades</b><br><br>
         """
 
-    html += "</div>"
+        if not ranking:
+            html += "Sem oportunidades"
 
-    html += """
-        <div style="background:#1f2933;padding:15px;border-radius:8px">
-        💼 Posições
-    """
+        for c in ranking:
+            html += f"<div>{c['symbol']} {c['direction']} {c['strength']:.2f}% {c['level']}</div>"
 
-    for p in pos:
-        cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
-        html += f"""
-        <div>
-        {p['symbol']} | {p['side']} |
-        <span style="color:{cor}">${p['pnl']:.2f}</span> |
-        {p['tempo']} | {p['pct']:.1f}%
-        </div>
-        """
+        html += "</div></div>"
 
-    html += "</div></div></div></body></html>"
+    else:
+
+        html += "<h2>📈 Performance</h2><p>Em breve...</p>"
+
+    html += "</body></html>"
 
     return html
 
