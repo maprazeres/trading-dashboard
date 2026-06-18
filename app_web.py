@@ -52,8 +52,6 @@ def get_data():
 
         total = float(wallet["totalWalletBalance"])
         pnl = float(wallet["totalPerpUPL"])
-
-        # ✅ MMR
         mmr = float(wallet["accountMMRate"]) * 100
 
         pos_list = []
@@ -61,13 +59,10 @@ def get_data():
 
         for p in positions:
 
-            size = float(p["size"])
-            if size == 0:
+            if float(p["size"]) == 0:
                 continue
 
-            pnl_pos = float(p["unrealisedPnl"])
             value = float(p["positionValue"])
-
             exposure += value
 
             created = int(p["createdTime"])
@@ -76,19 +71,17 @@ def get_data():
             seconds = (datetime.now() - entry).total_seconds()
             days = seconds / 86400
 
-            if days < 1:
-                tempo = f"{days * 24:.1f}h"
-            else:
-                tempo = f"{days:.1f}d"
+            tempo = f"{days*24:.1f}h" if days < 1 else f"{days:.1f}d"
 
             pct = (value / total * 100) if total > 0 else 0
 
             pos_list.append({
                 "symbol": p["symbol"],
                 "side": p["side"],
-                "pnl": pnl_pos,
+                "pnl": float(p["unrealisedPnl"]),
                 "tempo": tempo,
-                "pct": pct
+                "pct": pct,
+                "days": days
             })
 
         exposure_pct = (exposure / total * 100) if total > 0 else 0
@@ -100,6 +93,44 @@ def get_data():
         return 0, 0, [], 0, 0
 
 
+# ================= IA =================
+def analyze_trades(pos, exposure, mmr):
+
+    mensagens = []
+
+    # ✅ EXPOSIÇÃO (SEU AJUSTE)
+    if exposure > 150:
+        mensagens.append("🚨 Exposição MUITO alta (>150%)")
+    elif exposure > 100:
+        mensagens.append("⚠️ Exposição elevada")
+
+    # ✅ MMR (SEU AJUSTE)
+    if mmr >= 10:
+        mensagens.append("🚨 Risco REAL de liquidação (MMR >=10%)")
+    elif mmr > 7:
+        mensagens.append("⚠️ MMR em zona de atenção")
+
+    # ✅ POSIÇÕES
+    for p in pos:
+
+        # posição grande (>20%)
+        if p["pct"] > 20:
+            mensagens.append(f"🔥 {p['symbol']} grande ({p['pct']:.1f}%)")
+
+        # posição longa (>20 dias)
+        if p["days"] > 20:
+            mensagens.append(f"⏱️ {p['symbol']} há {p['days']:.1f} dias aberta")
+
+        # prejuízo relevante
+        if p["pnl"] < -20:
+            mensagens.append(f"⚠️ {p['symbol']} prejuízo alto (${p['pnl']:.2f})")
+
+    if not mensagens:
+        mensagens.append("✅ Tudo sob controle")
+
+    return mensagens
+
+
 # ================= APP =================
 @app.route("/")
 def home():
@@ -107,29 +138,9 @@ def home():
     total, pnl, pos, exposure, mmr = get_data()
     remaining, daily, days, progress, status, cor_meta = get_goal(total)
 
+    analises = analyze_trades(pos, exposure, mmr)
+
     pnl_c = "#00ff88" if pnl >= 0 else "#ff4d4d"
-
-    # ================= ALERTA MMR =================
-    if mmr > 7:
-        mmr_status = "🚨 RISCO DE LIQUIDAÇÃO"
-        mmr_color = "#ff0000"
-    elif mmr > 5:
-        mmr_status = "⚠️ ATENÇÃO"
-        mmr_color = "#ffaa00"
-    else:
-        mmr_status = "✅ SEGURO"
-        mmr_color = "#00ff88"
-
-    # ================= ALERTA EXPOSIÇÃO =================
-    if exposure > 100:
-        exp_status = "🚨 MUITO ALTO"
-        exp_color = "#ff0000"
-    elif exposure > 60:
-        exp_status = "⚠️ ALTO"
-        exp_color = "#ffaa00"
-    else:
-        exp_status = "✅ CONTROLADO"
-        exp_color = "#00ff88"
 
     html = f"""
     <html>
@@ -150,14 +161,12 @@ def home():
 
     <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
     <h3>⚠️ Exposição</h3>
-    {exposure:.1f}%<br>
-    <b style="color:{exp_color}">{exp_status}</b>
+    {exposure:.1f}%
     </div>
 
     <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
     <h3>🧱 MMR</h3>
-    {mmr:.2f}%<br>
-    <b style="color:{mmr_color}">{mmr_status}</b>
+    {mmr:.2f}%
     </div>
 
     <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
@@ -172,9 +181,20 @@ def home():
     <div style="background:#333;height:10px;margin-top:10px;">
         <div style="width:{progress}%;background:#00ff88;height:10px;"></div>
     </div>
-
     </div>
 
+    <!-- IA -->
+    <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
+    <h3>🤖 Análise Inteligente</h3>
+    """
+
+    for m in analises:
+        html += f"<div>{m}</div>"
+
+    html += "</div>"
+
+    # POSIÇÕES
+    html += """
     <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
     <h3>💼 Posições</h3>
     """
