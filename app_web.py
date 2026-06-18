@@ -71,15 +71,15 @@ def detect_sma_cross(df):
 
 # ================= OPPORTUNITIES =================
 def get_opportunities():
-
     try:
         coins = requests.get(
-            "https://api.bybit.com/v5/market/tickers?category=linear"
+            "https://api.bybit.com/v5/market/tickers?category=linear",
+            timeout=10,
         ).json()["result"]["list"]
 
         btc = next(
             (float(c["price24hPcnt"]) * 100 for c in coins if c["symbol"] == "BTCUSDT"),
-            0
+            0,
         )
 
         ranking = []
@@ -99,27 +99,32 @@ def get_opportunities():
 
                 strength = change - btc
 
-                if abs(strength) < 5 or abs(strength) > 15:
+                if abs(strength) < 3 or abs(strength) > 15:
                     continue
 
-                url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval=240&limit=60"
-                candles = requests.get(url).json()["result"]["list"]
+                url = (
+                    f"https://api.bybit.com/v5/market/kline?category=linear&"
+                    f"symbol={sym}&interval=240&limit=60"
+                )
+                candles = requests.get(url, timeout=10).json()["result"]["list"]
 
-                df = pd.DataFrame(candles, columns=[
-                    "time", "open", "high", "low", "close",
-                    "volume", "turnover"
-                ])
-
+                df = pd.DataFrame(
+                    candles,
+                    columns=[
+                        "time", "open", "high", "low", "close",
+                        "volume", "turnover",
+                    ],
+                )
                 df = df.astype(float)
+
+                if len(df) < 60:
+                    continue
 
                 df["sma20"] = df["close"].rolling(20).mean()
                 df["sma50"] = df["close"].rolling(50).mean()
 
                 cross = detect_sma_cross(df)
                 st = supertrend(df)
-
-                if not cross:
-                    continue
 
                 if cross == "LONG" and st:
                     direction = "LONG"
@@ -128,20 +133,24 @@ def get_opportunities():
                 else:
                     continue
 
-                ranking.append({
-                    "symbol": sym,
-                    "direction": direction,
-                    "strength": strength
-                })
+                level = "🔥 FORTE" if abs(strength) > 8 else "⚡ MÉDIO"
 
-            except:
+                ranking.append(
+                    {
+                        "symbol": sym,
+                        "direction": direction,
+                        "strength": strength,
+                        "level": level,
+                    }
+                )
+
+            except Exception:
                 continue
 
         ranking.sort(key=lambda x: abs(x["strength"]), reverse=True)
-
         return ranking[:6]
 
-    except:
+    except Exception:
         return []
 
 
@@ -289,7 +298,7 @@ def home():
         cor = "#064" if c["direction"] == "LONG" else "#600"
         html += f"""
         <div style="background:{cor};padding:10px;margin:5px">
-        {c['symbol']} | {c['direction']} | {c['strength']:.2f}%
+        {c['symbol']} | {c['direction']} | {c['strength']:.2f}% | {c['level']}
         </div>
         """
 
