@@ -1,12 +1,12 @@
 from flask import Flask
 import requests
+import pandas as pd
 from datetime import datetime
 
 app = Flask(__name__)
 
 NGROK_URL = "https://tragedy-evil-praying.ngrok-free.dev"
 
-# 🎯 META
 TARGET = 500
 TARGET_DATE = datetime(2026, 6, 30)
 START_BALANCE = 364
@@ -23,198 +23,165 @@ def get_goal(current):
     progress = ((current - START_BALANCE) / (TARGET - START_BALANCE)) * 100
     progress = max(0, min(progress, 100))
 
-    if daily < 10:
-        status = "✅ NO RITMO"
-        color = "#00ff88"
-    else:
-        status = "⚠️ ATRASADO"
-        color = "#ff4d4d"
+    status = "✅ NO RITMO" if daily < 10 else "⚠️ ATRASADO"
+    color = "#00ff88" if daily < 10 else "#ff4d4d"
 
     return remaining, daily, days, progress, status, color
 
 
-# ================= DADOS =================
-def get_data():
+# ================= SUPERTREND =================
+def supertrend(df, period=10, multiplier=3):
+
+    hl2 = (df['high'] + df['low']) / 2
+    df['atr'] = (df['high'] - df['low']).rolling(period).mean()
+
+    upper = hl2 + (multiplier * df['atr'])
+    lower = hl2 - (multiplier * df['atr'])
+
+    trend = [True]
+
+    for i in range(1, len(df)):
+        if df['close'][i] > upper[i-1]:
+            trend.append(True)
+        elif df['close'][i] < lower[i-1]:
+            trend.append(False)
+        else:
+            trend.append(trend[i-1])
+
+    df['st'] = trend
+    return trend[-1]
+
+
+# ================= DETECTAR CRUZAMENTO SMA =================
+def detect_sma_cross(df):
+
+    sma20_prev = df["sma20"].iloc[-2]
+    sma50_prev = df["sma50"].iloc[-2]
+
+    sma20_now = df["sma20"].iloc[-1]
+    sma50_now = df["sma50"].iloc[-1]
+
+    # ✅ CRUZAMENTO PRA CIMA
+    if sma20_prev < sma50_prev and sma20_now > sma50_now:
+        return "LONG"
+
+    # ✅ CRUZAMENTO PRA BAIXO
+    if sma20_prev > sma50_prev and sma20_now < sma50_now:
+        return "SHORT"
+
+    return None
+
+
+# ================= SCANNER =================
+def get_opportunities():
 
     try:
-        res = requests.get(
-            f"{NGROK_URL}/data",
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "ngrok-skip-browser-warning": "true"
-            }
+        coins = requests.get(
+            "https://api.bybit.com/v5/market/tickers?category=linear"
+        ).json()["result"]["list"]
+
+        btc = next(
+            (float(c["price24hPcnt"]) * 100 for c in coins if c["symbol"] == "BTCUSDT"),
+            0
         )
 
-        data = res.json()
+        ranking = []
 
-        wallet = data["wallet"]["result"]["list"][0]
-        positions = data["positions"]["result"]["list"]
+        for c in coins:
+            try:
+                sym = c["symbol"]
+                change = float(c["price24hPcnt"]) * 100
+                vol = float(c["turnover24h"])
+                price = float(c["lastPrice"])
 
-        total = float(wallet["totalWalletBalance"])
-        pnl = float(wallet["totalPerpUPL"])
-        mmr = float(wallet["accountMMRate"]) * 100
+                if sym == "BTCUSDT":
+                    continue
 
-        pos_list = []
-        exposure = 0
+                if price < 0.01 or vol < 5_000_000:
+                    continue
 
-        for p in positions:
+                strength = change - btc
 
-            if float(p["size"]) == 0:
+                # ✅ MOMENTUM + EVITAR TOPO
+                if abs(strength) < 5 or abs(strength) > 15:
+                    continue
+
+                # ✅ CANDLES
+                url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval=240&limit=60"
+                candles = requests.get(url).json()["result"]["list"]
+
+                df = pd.DataFrame(candles, columns=[
+                    "time", "open", "high", "low", "close",
+                    "volume", "turnover"
+                ])
+
+                df = df.astype(float)
+
+                # ✅ SMA
+                df["sma20"] = df["close"].rolling(20).mean()
+                df["sma50"] = df["close"].rolling(50).mean()
+
+                # ✅ CRUZAMENTO REAL
+                cross = detect_sma_cross(df)
+
+                # ✅ SUPERTREND
+                st = supertrend(df)
+
+                if not cross:
+                    continue
+
+                # ✅ VALIDAR DIREÇÃO
+                if cross == "LONG" and st:
+                    direction = "LONG"
+                elif cross == "SHORT" and not st:
+                    direction = "SHORT"
+                else:
+                    continue
+
+                ranking.append({
+                    "symbol": sym,
+                    "direction": direction,
+                    "strength": strength
+                })
+
+            except:
                 continue
 
-            value = float(p["positionValue"])
-            exposure += value
+        ranking.sort(key=lambda x: abs(x["strength"]), reverse=True)
 
-            created = int(p["createdTime"])
-            entry = datetime.fromtimestamp(created / 1000)
+        return ranking[:6]
 
-            seconds = (datetime.now() - entry).total_seconds()
-            days = seconds / 86400
-
-            tempo = f"{days*24:.1f}h" if days < 1 else f"{days:.1f}d"
-
-            pct = (value / total * 100) if total > 0 else 0
-
-            pos_list.append({
-                "symbol": p["symbol"],
-                "side": p["side"],
-                "pnl": float(p["unrealisedPnl"]),
-                "tempo": tempo,
-                "pct": pct,
-                "days": days
-            })
-
-        exposure_pct = (exposure / total * 100) if total > 0 else 0
-
-        return total, pnl, pos_list, exposure_pct, mmr
-
-    except Exception as e:
-        print("ERRO:", e)
-        return 0, 0, [], 0, 0
-
-
-# ================= IA =================
-def analyze_trades(pos, exposure, mmr):
-
-    mensagens = []
-
-    # ✅ EXPOSIÇÃO (SEU AJUSTE)
-    if exposure > 150:
-        mensagens.append("🚨 Exposição MUITO alta (>150%)")
-    elif exposure > 100:
-        mensagens.append("⚠️ Exposição elevada")
-
-    # ✅ MMR (SEU AJUSTE)
-    if mmr >= 10:
-        mensagens.append("🚨 Risco REAL de liquidação (MMR >=10%)")
-    elif mmr > 7:
-        mensagens.append("⚠️ MMR em zona de atenção")
-
-    # ✅ POSIÇÕES
-    for p in pos:
-
-        # posição grande (>20%)
-        if p["pct"] > 20:
-            mensagens.append(f"🔥 {p['symbol']} grande ({p['pct']:.1f}%)")
-
-        # posição longa (>20 dias)
-        if p["days"] > 20:
-            mensagens.append(f"⏱️ {p['symbol']} há {p['days']:.1f} dias aberta")
-
-        # prejuízo relevante
-        if p["pnl"] < -20:
-            mensagens.append(f"⚠️ {p['symbol']} prejuízo alto (${p['pnl']:.2f})")
-
-    if not mensagens:
-        mensagens.append("✅ Tudo sob controle")
-
-    return mensagens
+    except:
+        return []
 
 
 # ================= APP =================
 @app.route("/")
 def home():
 
-    total, pnl, pos, exposure, mmr = get_data()
-    remaining, daily, days, progress, status, cor_meta = get_goal(total)
+    ranking = get_opportunities()
 
-    analises = analyze_trades(pos, exposure, mmr)
-
-    pnl_c = "#00ff88" if pnl >= 0 else "#ff4d4d"
-
-    html = f"""
+    html = """
     <html>
-    <body style="background:#0f0f0f;color:white;font-family:Segoe UI;">
+    <body style='background:#0f0f0f;color:white;font-family:Segoe UI;'>
 
-    <h2 style="padding:10px;">📊 TRADING DASHBOARD PRO</h2>
-
-    <div style="display:flex">
-
-    <!-- ESQUERDA -->
-    <div style="width:35%;padding:15px">
-
-    <div style="background:#1c1c1c;padding:15px;border-radius:8px">
-    <h3>💰 Conta</h3>
-    Total: ${total:.2f}<br>
-    PnL: <span style="color:{pnl_c}">${pnl:.2f}</span>
-    </div>
-
-    <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
-    <h3>⚠️ Exposição</h3>
-    {exposure:.1f}%
-    </div>
-
-    <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
-    <h3>🧱 MMR</h3>
-    {mmr:.2f}%
-    </div>
-
-    <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
-    <h3>🎯 Meta</h3>
-
-    Falta: ${remaining:.2f}<br>
-    Dias: {days}<br>
-    Por dia: ${daily:.2f}<br>
-
-    <b style="color:{cor_meta}">{status}</b>
-
-    <div style="background:#333;height:10px;margin-top:10px;">
-        <div style="width:{progress}%;background:#00ff88;height:10px;"></div>
-    </div>
-    </div>
-
-    <!-- IA -->
-    <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
-    <h3>🤖 Análise Inteligente</h3>
+    <h2>🚀 SCANNER PROFISSIONAL (SMA CROSS + SUPERTREND)</h2>
     """
 
-    for m in analises:
-        html += f"<div>{m}</div>"
+    if not ranking:
+        html += "<p>Sem oportunidades no momento</p>"
 
-    html += "</div>"
+    for c in ranking:
 
-    # POSIÇÕES
-    html += """
-    <div style="background:#1c1c1c;padding:15px;margin-top:10px;border-radius:8px">
-    <h3>💼 Posições</h3>
-    """
-
-    if not pos:
-        html += "<p>Nenhuma posição</p>"
-
-    for p in pos:
-
-        cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
-        destaque = "🔥" if p["pct"] > 20 else ""
+        cor = "#064" if c["direction"] == "LONG" else "#600"
 
         html += f"""
-        <div style="color:{cor}">
-        {p['symbol']} {destaque} | {p['side']} | ${p['pnl']:.2f}
-        | {p['tempo']} | {p['pct']:.1f}%
+        <div style="background:{cor};padding:10px;margin:10px">
+        {c['symbol']} | {c['direction']} | {c['strength']:.2f}%
         </div>
         """
 
-    html += "</div></div></div></body></html>"
+    html += "</body></html>"
 
     return html
 
