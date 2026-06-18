@@ -7,6 +7,7 @@ app = Flask(__name__)
 
 NGROK_URL = "https://tragedy-evil-praying.ngrok-free.dev"
 
+# 🎯 META
 TARGET = 500
 TARGET_DATE = datetime(2026, 6, 30)
 START_BALANCE = 364
@@ -16,7 +17,6 @@ START_BALANCE = 364
 def get_goal(current):
 
     days = max((TARGET_DATE - datetime.now()).days, 1)
-
     remaining = TARGET - current
     daily = remaining / days
 
@@ -33,26 +33,25 @@ def get_goal(current):
 def supertrend(df, period=10, multiplier=3):
 
     hl2 = (df['high'] + df['low']) / 2
-    df['atr'] = (df['high'] - df['low']).rolling(period).mean()
+    atr = (df['high'] - df['low']).rolling(period).mean()
 
-    upper = hl2 + (multiplier * df['atr'])
-    lower = hl2 - (multiplier * df['atr'])
+    upper = hl2 + multiplier * atr
+    lower = hl2 - multiplier * atr
 
     trend = [True]
 
     for i in range(1, len(df)):
-        if df['close'][i] > upper[i-1]:
+        if df['close'].iloc[i] > upper.iloc[i - 1]:
             trend.append(True)
-        elif df['close'][i] < lower[i-1]:
+        elif df['close'].iloc[i] < lower.iloc[i - 1]:
             trend.append(False)
         else:
-            trend.append(trend[i-1])
+            trend.append(trend[i - 1])
 
-    df['st'] = trend
     return trend[-1]
 
 
-# ================= DETECTAR CRUZAMENTO SMA =================
+# ================= SMA CROSS =================
 def detect_sma_cross(df):
 
     sma20_prev = df["sma20"].iloc[-2]
@@ -61,18 +60,16 @@ def detect_sma_cross(df):
     sma20_now = df["sma20"].iloc[-1]
     sma50_now = df["sma50"].iloc[-1]
 
-    # ✅ CRUZAMENTO PRA CIMA
     if sma20_prev < sma50_prev and sma20_now > sma50_now:
         return "LONG"
 
-    # ✅ CRUZAMENTO PRA BAIXO
     if sma20_prev > sma50_prev and sma20_now < sma50_now:
         return "SHORT"
 
     return None
 
 
-# ================= SCANNER =================
+# ================= OPPORTUNITIES =================
 def get_opportunities():
 
     try:
@@ -102,11 +99,9 @@ def get_opportunities():
 
                 strength = change - btc
 
-                # ✅ MOMENTUM + EVITAR TOPO
                 if abs(strength) < 5 or abs(strength) > 15:
                     continue
 
-                # ✅ CANDLES
                 url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval=240&limit=60"
                 candles = requests.get(url).json()["result"]["list"]
 
@@ -117,20 +112,15 @@ def get_opportunities():
 
                 df = df.astype(float)
 
-                # ✅ SMA
                 df["sma20"] = df["close"].rolling(20).mean()
                 df["sma50"] = df["close"].rolling(50).mean()
 
-                # ✅ CRUZAMENTO REAL
                 cross = detect_sma_cross(df)
-
-                # ✅ SUPERTREND
                 st = supertrend(df)
 
                 if not cross:
                     continue
 
-                # ✅ VALIDAR DIREÇÃO
                 if cross == "LONG" and st:
                     direction = "LONG"
                 elif cross == "SHORT" and not st:
@@ -155,33 +145,172 @@ def get_opportunities():
         return []
 
 
+# ================= DATA REAL =================
+def get_data():
+
+    try:
+        res = requests.get(
+            f"{NGROK_URL}/data",
+            headers={
+                "ngrok-skip-browser-warning": "true",
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
+
+        data = res.json()
+
+        wallet = data["wallet"]["result"]["list"][0]
+        positions = data["positions"]["result"]["list"]
+
+        total = float(wallet["totalWalletBalance"])
+        pnl = float(wallet["totalPerpUPL"])
+        mmr = float(wallet["accountMMRate"]) * 100
+
+        pos_list = []
+        exposure = 0
+
+        for p in positions:
+
+            if float(p["size"]) == 0:
+                continue
+
+            value = float(p["positionValue"])
+            exposure += value
+
+            created = int(p["createdTime"])
+            entry = datetime.fromtimestamp(created / 1000)
+
+            days = (datetime.now() - entry).total_seconds() / 86400
+            tempo = f"{days:.1f}d" if days >= 1 else f"{days*24:.1f}h"
+
+            pct = (value / total * 100) if total > 0 else 0
+
+            pos_list.append({
+                "symbol": p["symbol"],
+                "side": p["side"],
+                "pnl": float(p["unrealisedPnl"]),
+                "tempo": tempo,
+                "pct": pct,
+                "days": days
+            })
+
+        exposure_pct = (exposure / total * 100) if total > 0 else 0
+
+        return total, pnl, pos_list, exposure_pct, mmr
+
+    except Exception as e:
+        print("ERRO:", e)
+        return 0, 0, [], 0, 0
+
+
+# ================= IA =================
+def analyze_trades(pos, exposure, mmr):
+
+    mensagens = []
+
+    if exposure > 150:
+        mensagens.append("🚨 Exposição MUITO alta (>150%)")
+
+    if mmr >= 10:
+        mensagens.append("🚨 Risco de liquidação (MMR >=10%)")
+
+    for p in pos:
+        if p["pct"] > 20:
+            mensagens.append(f"🔥 {p['symbol']} grande ({p['pct']:.1f}%)")
+        if p["days"] > 20:
+            mensagens.append(f"⏱️ {p['symbol']} +20 dias aberta")
+
+    if not mensagens:
+        mensagens.append("✅ Tudo sob controle")
+
+    return mensagens
+
+
 # ================= APP =================
 @app.route("/")
 def home():
 
+    total, pnl, pos, exposure, mmr = get_data()
     ranking = get_opportunities()
+    analises = analyze_trades(pos, exposure, mmr)
 
-    html = """
+    remaining, daily, days, progress, status, _ = get_goal(total)
+
+    html = f"""
     <html>
-    <body style='background:#0f0f0f;color:white;font-family:Segoe UI;'>
+    <body style="background:#0d1117;color:white;font-family:Segoe UI;margin:0">
 
-    <h2>🚀 SCANNER PROFISSIONAL (SMA CROSS + SUPERTREND)</h2>
+    <h2 style="padding:10px">📊 Trading Dashboard PRO</h2>
+
+    <div style="display:flex">
+
+    <div style="width:30%;padding:15px;background:#161b22">
+
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
+        💰 ${total:.2f}<br>
+        PnL: <span style="color:{'#00ff88' if pnl>=0 else '#ff4d4d'}">${pnl:.2f}</span>
+        </div>
+
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
+        ⚠️ Exposição: {exposure:.1f}%
+        </div>
+
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
+        🧱 MMR: {mmr:.2f}%
+        </div>
+
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
+        🎯 Meta<br>
+        Falta: ${remaining:.2f}<br>
+        Dias: {days}<br>
+        Por dia: ${daily:.2f}
+        <div style="height:8px;background:#333;margin-top:5px">
+            <div style="width:{progress}%;background:#00ff88;height:8px"></div>
+        </div>
+        </div>
+
+        <div style="background:#1f2933;padding:15px;border-radius:8px">
+        🤖 IA<br>
+        {''.join(f"<div>{m}</div>" for m in analises)}
+        </div>
+
+    </div>
+
+    <div style="width:70%;padding:15px">
+
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:8px">
+        🚀 Oportunidades
     """
 
     if not ranking:
-        html += "<p>Sem oportunidades no momento</p>"
+        html += "<p>Sem sinais</p>"
 
     for c in ranking:
-
         cor = "#064" if c["direction"] == "LONG" else "#600"
-
         html += f"""
-        <div style="background:{cor};padding:10px;margin:10px">
+        <div style="background:{cor};padding:10px;margin:5px">
         {c['symbol']} | {c['direction']} | {c['strength']:.2f}%
         </div>
         """
 
-    html += "</body></html>"
+    html += "</div>"
+
+    html += """
+        <div style="background:#1f2933;padding:15px;border-radius:8px">
+        💼 Posições
+    """
+
+    for p in pos:
+        cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
+        html += f"""
+        <div>
+        {p['symbol']} | {p['side']} |
+        <span style="color:{cor}">${p['pnl']:.2f}</span> |
+        {p['tempo']} | {p['pct']:.1f}%
+        </div>
+        """
+
+    html += "</div></div></div></body></html>"
 
     return html
 
