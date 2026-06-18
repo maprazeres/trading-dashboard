@@ -1,13 +1,12 @@
 from flask import Flask, request
 import requests
-import pandas as pd
 from datetime import datetime
 
 app = Flask(__name__)
 
 NGROK_URL = "https://tragedy-evil-praying.ngrok-free.dev"
 
-# 🎯 META
+# ===== META =====
 TARGET = 500
 TARGET_DATE = datetime(2026, 6, 30)
 START_BALANCE = 364
@@ -27,109 +26,12 @@ def get_goal(current):
     return remaining, daily, days, progress, status
 
 
-# ================= SMA CROSS =================
-def detect_sma_cross(df):
-    sma20_prev = df["sma20"].iloc[-2]
-    sma50_prev = df["sma50"].iloc[-2]
-
-    sma20_now = df["sma20"].iloc[-1]
-    sma50_now = df["sma50"].iloc[-1]
-
-    if sma20_prev < sma50_prev and sma20_now > sma50_now:
-        return "LONG"
-
-    if sma20_prev > sma50_prev and sma20_now < sma50_now:
-        return "SHORT"
-
-    return None
-
-
-# ================= SCANNER =================
-def get_opportunities():
-    try:
-        coins = requests.get(
-            "https://api.bybit.com/v5/market/tickers?category=linear"
-        ).json()["result"]["list"]
-
-        btc = next(
-            (float(c["price24hPcnt"]) * 100 for c in coins if c["symbol"] == "BTCUSDT"),
-            0
-        )
-
-        ranking = []
-
-        for c in coins:
-            try:
-                sym = c["symbol"]
-                change = float(c["price24hPcnt"]) * 100
-                vol = float(c["turnover24h"])
-                price = float(c["lastPrice"])
-
-                if sym == "BTCUSDT":
-                    continue
-
-                if price < 0.01 or vol < 5_000_000:
-                    continue
-
-                strength = change - btc
-
-                # ✅ menos restritivo
-                if abs(strength) < 3 or abs(strength) > 15:
-                    continue
-
-                url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval=240&limit=60"
-                candles = requests.get(url).json()["result"]["list"]
-
-                df = pd.DataFrame(candles, columns=[
-                    "time","open","high","low","close","volume","turnover"
-                ]).astype(float)
-
-                df["sma20"] = df["close"].rolling(20).mean()
-                df["sma50"] = df["close"].rolling(50).mean()
-
-                cross = detect_sma_cross(df)
-
-                trend_up = df["sma20"].iloc[-1] > df["sma50"].iloc[-1]
-                trend_down = df["sma20"].iloc[-1] < df["sma50"].iloc[-1]
-
-                # ✅ lógica flexível (mais sinais)
-                if cross == "LONG" or trend_up:
-                    direction = "LONG"
-                elif cross == "SHORT" or trend_down:
-                    direction = "SHORT"
-                else:
-                    continue
-
-                level = "🔥 FORTE" if abs(strength) > 8 else "⚡ MÉDIO"
-
-                ranking.append({
-                    "symbol": sym,
-                    "direction": direction,
-                    "strength": strength,
-                    "level": level
-                })
-
-            except:
-                continue
-
-        ranking.sort(key=lambda x: abs(x["strength"]), reverse=True)
-        return ranking[:6]
-
-    except:
-        print("TOTAL COINS ANALISADAS:", len(coins))
-        print("OPORTUNIDADES ENCONTRADAS:", len(ranking))
-        return []
-
-
 # ================= DADOS =================
 def get_data():
     try:
         res = requests.get(
             f"{NGROK_URL}/data",
-            headers={
-                "ngrok-skip-browser-warning": "true",
-                "User-Agent": "Mozilla/5.0"
-            }
+            headers={"ngrok-skip-browser-warning": "true"}
         )
 
         data = res.json()
@@ -172,8 +74,7 @@ def get_data():
 
         return total, pnl, pos_list, exposure_pct, mmr
 
-    except Exception as e:
-        print("ERRO:", e)
+    except:
         return 0, 0, [], 0, 0
 
 
@@ -189,7 +90,7 @@ def analyze_trades(pos, exposure, mmr):
 
     for p in pos:
         if p["pct"] > 20:
-            mensagens.append(f"🔥 {p['symbol']} grande")
+            mensagens.append(f"🔥 {p['symbol']} posição grande")
         if p["days"] > 20:
             mensagens.append(f"⏱️ {p['symbol']} +20 dias")
 
@@ -197,6 +98,43 @@ def analyze_trades(pos, exposure, mmr):
         mensagens.append("✅ Tudo sob controle")
 
     return mensagens
+
+
+# ================= SCANNER =================
+def get_opportunities():
+    try:
+        coins = requests.get(
+            "https://api.bybit.com/v5/market/tickers?category=linear"
+        ).json()["result"]["list"]
+
+        ranking = []
+
+        for c in coins:
+            try:
+                change = float(c["price24hPcnt"]) * 100
+
+                if abs(change) < 1:  # mais sinais
+                    continue
+
+                direction = "LONG" if change > 0 else "SHORT"
+
+                level = "🔥 FORTE" if abs(change) > 5 else "⚡ MÉDIO"
+
+                ranking.append({
+                    "symbol": c["symbol"],
+                    "direction": direction,
+                    "change": change,
+                    "level": level
+                })
+
+            except:
+                continue
+
+        ranking.sort(key=lambda x: abs(x["change"]), reverse=True)
+        return ranking[:6]
+
+    except:
+        return []
 
 
 # ================= APP =================
@@ -211,66 +149,95 @@ def home():
 
     remaining, daily, days, progress, status = get_goal(total)
 
-    # ✅ MENU
-    html = """
+    html = f"""
     <html>
-    <body style="background:#0d1117;color:white;font-family:Segoe UI">
+    <body style="background:#0d1117;color:white;font-family:Segoe UI;margin:0">
 
-    <div style="padding:10px;background:#111">
-        <a href="/?page=main" style="color:white">📊 Dashboard</a> |
-        <a href="/?page=stats" style="color:white">📈 Performance</a>
+    <!-- MENU -->
+    <div style="background:#111;padding:12px;display:flex;gap:20px">
+        <a href="/?page=main" style="color:#00ff88;text-decoration:none">📊 Dashboard</a>
+        <a href="/?page=stats" style="color:#aaa;text-decoration:none">📈 Performance</a>
     </div>
+
     """
 
-    # ================= DASHBOARD =================
+    # ===== DASHBOARD =====
     if page == "main":
 
         html += f"""
+        <h2 style="padding:10px">📊 Trading Dashboard PRO</h2>
+
         <div style="display:flex">
 
-        <div style="width:30%;padding:15px;background:#161b22">
+        <!-- LEFT -->
+        <div style="width:30%;padding:15px">
 
-        <div>💰 Total: ${total:.2f}</div>
-        <div>PnL: ${pnl:.2f}</div><br>
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:10px">
+        💰 ${total:.2f}<br>
+        PnL: <span style="color:{'#00ff88' if pnl>=0 else '#ff4d4d'}">${pnl:.2f}</span>
+        </div>
 
-        <div>⚠️ Exposição: {exposure:.1f}%</div>
-        <div>🧱 MMR: {mmr:.2f}%</div><br>
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:10px">
+        ⚠️ Exposição: {exposure:.1f}%
+        </div>
 
-        <div>🎯 Falta: ${remaining:.2f}</div>
-        <div>Por dia: ${daily:.2f}</div>
-        <div>{status}</div><br>
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:10px">
+        🧱 MMR: {mmr:.2f}%
+        </div>
 
-        <div>🤖 IA</div>
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:10px">
+        🎯 Falta: ${remaining:.2f}<br>
+        Dias: {days}<br>
+        Por dia: ${daily:.2f}<br>
+        {status}
+        </div>
+
+        <div style="background:#1f2933;padding:15px;border-radius:10px">
+        🤖 IA<br>
         {''.join(f"<div>{m}</div>" for m in analises)}
-
-        <br><b>💼 Posições</b><br>
-        {"".join(f"{p['symbol']} {p['side']} ${p['pnl']:.2f} | {p['tempo']}<br>" for p in pos)}
+        </div>
 
         </div>
 
+        <!-- RIGHT -->
         <div style="width:70%;padding:15px">
 
-        <h3>🚀 Oportunidades</h3>
+        <div style="background:#1f2933;padding:15px;margin-bottom:10px;border-radius:10px">
+        🚀 Oportunidades
         """
 
         if not ranking:
-            html += "<div>Sem oportunidades no momento</div>"
+            html += "<div>Sem sinais</div>"
 
         for c in ranking:
             html += f"""
             <div style="padding:10px;margin:5px;background:{'#064' if c['direction']=='LONG' else '#600'}">
-            {c['symbol']} | {c['direction']} | {c['strength']:.2f}% | {c['level']}
+            {c['symbol']} | {c['direction']} | {c['change']:.2f}% | {c['level']}
             </div>
             """
 
-        html += "</div></div>"
+        html += "</div>"
 
-    # ================= PERFORMANCE =================
+        html += "<div style='background:#1f2933;padding:15px;border-radius:10px'>💼 Posições<br>"
+
+        for p in pos:
+            cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
+
+            html += f"""
+            <div>
+            {p['symbol']} | {p['side']} |
+            <span style="color:{cor}">${p['pnl']:.2f}</span> |
+            {p['tempo']} | {p['pct']:.1f}%
+            </div>
+            """
+
+        html += "</div></div></div>"
+
     else:
         html += """
         <div style="padding:20px">
         <h2>📈 Performance</h2>
-        <p>Em breve gráficos 📊</p>
+        <p>Em breve gráficos</p>
         </div>
         """
 
