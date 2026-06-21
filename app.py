@@ -3,6 +3,8 @@ from pybit.unified_trading import HTTP
 import os
 from dotenv import load_dotenv
 
+print("VERSAO NOVA API ✅")
+
 app = Flask(__name__)
 
 load_dotenv()
