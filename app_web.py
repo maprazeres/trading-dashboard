@@ -127,6 +127,9 @@ def get_signals_early():
     coins = requests.get(
         "https://api.bybit.com/v5/market/tickers?category=linear"
     ).json()["result"]["list"]
+    
+    # ordenar por volume (maior → menor)
+    coins = sorted(coins, key=lambda x: float(x["turnover24h"]), reverse=True)
 
     for c in coins[:25]:
         try:
