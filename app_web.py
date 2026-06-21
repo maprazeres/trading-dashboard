@@ -5,7 +5,7 @@ from datetime import datetime
 app = Flask(__name__)
 
 # ✅ sempre atualize se mudar o ngrok
-NGROK_URL = "https://tragedy-evil-praying.ngrok-free.dev"
+NGROK_URL = "https://trading-api-s7lm.onrender.com"
 
 
 # ================= SAFE REQUEST =================
