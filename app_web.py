@@ -4,14 +4,16 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# ✅ USE SEU NGROK ATUAL AQUI
+# ✅ sempre atualize se mudar o ngrok
 NGROK_URL = "https://tragedy-evil-praying.ngrok-free.dev"
 
 
-# ================= FUNÇÃO SEGURA API =================
+# ================= SAFE REQUEST =================
 def safe_get(url):
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, timeout=10)
+        if res.status_code != 200:
+            return None
         return res.json()
     except:
         return None
@@ -56,9 +58,9 @@ def get_data():
         return 0, 0, []
 
 
-# ================= LINK TRADINGVIEW =================
+# ================= LINK =================
 def tv_link(symbol):
-    return f"<a href='https://www.tradingview.com/chart/?symbol=BYBIT:{symbol}&interval=240' target='_blank'>"
+    return f'<a href="https://www.tradingview.com/chart/?symbol=BYBIT:{symbol}&interval=240" target="_blank" style="color:white;text-decoration:none;">'
 
 
 # ================= OPORTUNIDADES =================
@@ -70,7 +72,6 @@ def get_opportunities():
 
         coins = data["result"]["list"]
 
-        # ✅ ordenar por volume
         coins = sorted(coins, key=lambda x: float(x["turnover24h"]), reverse=True)
 
         ranking = []
@@ -91,6 +92,7 @@ def get_opportunities():
                     "change": change,
                     "volume": volume
                 })
+
             except:
                 continue
 
@@ -101,7 +103,7 @@ def get_opportunities():
         return []
 
 
-# ================= ALERTA INICIAL =================
+# ================= ALERTA =================
 def get_signals_early():
     sinais = []
 
@@ -124,6 +126,7 @@ def get_signals_early():
                 k = safe_get(
                     f"https://api.bybit.com/v5/market/kline?category=linear&symbol={sym}&interval=240&limit=30"
                 )
+
                 if not k:
                     continue
 
@@ -132,6 +135,7 @@ def get_signals_early():
 
                 sma8_prev = sum(closes[-9:-1]) / 8
                 sma21_prev = sum(closes[-22:-1]) / 21
+
                 sma8_now = sum(closes[-8:]) / 8
                 sma21_now = sum(closes[-21:]) / 21
 
@@ -169,15 +173,15 @@ def home():
 
     <body style="background:#0d1117;color:white;font-family:Arial;margin:10px">
 
-    <h2 style="text-align:center;margin-bottom:15px">
+    <h2 style="text-align:center;margin-bottom:15px;">
     📊 Trading Dashboard PRO
     </h2>
 
-    <div style="background:#161b22;padding:12px;margin-bottom:12px;border-radius:10px;">
+    <div style="background:#161b22;padding:12px;border-radius:10px;margin-bottom:12px;">
     💰 ${total:.2f} | PnL: ${pnl:.2f}
     </div>
 
-    <h3 style="margin-top:20px;margin-bottom:10px;">🚀 Oportunidades</h3>
+    <h3 style="margin-top:20px;">🚀 Oportunidades</h3>
     """
 
     for c in ranking:
@@ -202,6 +206,7 @@ def home():
         border-radius:6px;
         background:{'#053d2a' if c['direction']=='LONG' else '#3d0505'};
         color:{'#00ff88' if c['direction']=='LONG' else '#ff4d4d'};
+        font-weight:bold;
         ">
         {c['direction']}
         </div>
@@ -217,10 +222,24 @@ def home():
     html += "<h3>⚡ Alerta Inicial</h3>"
 
     for s in early:
-        html += f"<div>{tv_link(s['symbol'])}{s['symbol']} | {s['type']}</a></div>"
+        html += f"""
+        <div>
+        {tv_link(s['symbol'])}{s['symbol']} | {s['type']}</a>
+        </div>
+        """
+
+    html += "<h3>💼 Posições</h3>"
+
+    for p in pos:
+        cor = "#00ff88" if p["pnl"] >= 0 else "#ff4d4d"
+
+        html += f"""
+        <div style="color:{cor};margin-bottom:5px;">
+        {p['symbol']} | {p['side']} | ${p['pnl']:.2f} | {p['time']} | risco ${p['risk']:.0f}
+        </div>
+        """
 
     html += "</body></html>"
-
     return html
 
 
