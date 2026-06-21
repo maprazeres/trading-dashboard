@@ -7,12 +7,12 @@ call .venv\Scripts\activate
 echo Iniciando API...
 start cmd /k ".venv\Scripts\python.exe local_api.py"
 
-timeout /t 5
+timeout /t 3
 
-echo Iniciando NGROK...
-start cmd /k "ngrok http 5001"
+echo Iniciando APP WEB...
+start cmd /k ".venv\Scripts\python.exe app_web.py"
 
-timeout /t 8
+timeout /t 3
 
-echo Abrindo navegador...
-start https://trading-dashboard-su8v.onrender.com
+echo Abrindo navegador LOCAL...
+start http://127.0.0.1:5000

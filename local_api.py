@@ -4,6 +4,7 @@ from flask import Flask, jsonify
 from pybit.unified_trading import HTTP
 from dotenv import load_dotenv
 import os
+import requests
 
 # ✅ CARREGA ENV
 load_dotenv()
@@ -16,6 +17,18 @@ print("API_KEY:", "OK" if api_key else "NÃO CARREGOU")
 print("API_SECRET:", "OK" if api_secret else "NÃO CARREGOU")
 
 app = Flask(__name__)
+
+@app.route("/tickers")
+def tickers():
+    try:
+        data = requests.get(
+            "https://api.bybit.com/v5/market/tickers?category=linear"
+        ).json()
+
+        return data
+
+    except Exception as e:
+        return {"error": str(e)}
 
 # ✅ CONEXÃO REAL BYBIT
 session = HTTP(
